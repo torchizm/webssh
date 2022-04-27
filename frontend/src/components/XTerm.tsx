@@ -1,111 +1,148 @@
-import {
-  FunctionComponent,
+import React, {
   useContext,
   useEffect,
+  useImperativeHandle,
   useRef,
-  useState,
 } from "react";
 
 import "xterm/css/xterm.css";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
-import { DisabledKeys, KeyHandlers } from "../helpers/KeysHelper";
+import { DisabledKeys, FilteredKeys, KeyHandlers } from "../helpers/KeysHelper";
 import { CommandsHelper } from "../helpers/CommandsHelper";
-import SocketContext from "../helpers/SocketContext";
-import { Socket } from "socket.io-client";
+import SocketContext, { SocketContextProvider } from "../helpers/SocketContext";
 
 type Props = {
   submit: (cmd: string) => void;
-  responseMessage: string;
-  response: (message: string) => void;
 };
 
-const XTerm: FunctionComponent<Props> = ({
-  submit,
-  responseMessage,
-  response,
-}) => {
-  const socket = useContext(SocketContext) as Socket;
+export type RefProps = {
+  write: (message: string) => void;
+  writeln: (message: string) => void;
+  clear: () => void;
+};
+
+const XTerm = React.forwardRef<RefProps, Props>(({ submit }, ref) => {
+  const { socket, credentials } = useContext(
+    SocketContext
+  ) as SocketContextProvider;
+
   const terminalElement = useRef<HTMLDivElement>(null);
 
   let currentLine: string = "";
-  var term = new Terminal();
+  let term = new Terminal();
+
+  useImperativeHandle(ref, () => ({
+    write: (message: string) => {
+      term.write("\x1b[1;37m" + message);
+    },
+    writeln: (message: string) => {
+      term.writeln("\x1b[1;37m" + message);
+    },
+    clear: () => {
+      term.clear();
+    },
+  }));
 
   useEffect(() => {
-    term.options.fontSize = 40;
     var fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     fitAddon.fit();
     term.open(terminalElement.current as HTMLDivElement);
+    term.options.fontSize = 26;
 
-    term.onKey((event: { key: string; domEvent: KeyboardEvent }) => {
-      let key: string = event.domEvent.key;
+    if (credentials.user !== "") {
+      const sign = credentials.user === "root" ? "$" : "#";
+      term.write(`\x1b[1;35m${credentials.user}\x1b[1;37m:~${sign} `);
+    }
 
-      if (!socket.connected || DisabledKeys.includes(key.toLowerCase())) {
-        return;
-      }
+    term.onKey(handleOnKey);
 
-      if (event.domEvent.ctrlKey) {
-        key = `Ctrl+${key}`;
-      }
+    socket.on("write", handleWrite);
+  }, [socket]);
 
-      if (event.domEvent.altKey) {
-        key = `Alt+${key}`;
-      }
+  const handleOnKey = (event: { key: string; domEvent: KeyboardEvent }) => {
+    let key: string = event.domEvent.key;
 
-      let isCommand = false;
+    if (!socket.connected || DisabledKeys.includes(key.toLowerCase())) {
+      return;
+    }
 
-      switch (key.toLowerCase()) {
-        case "backspace":
-          currentLine = currentLine.slice(0, -1);
-          break;
-        case "ctrl+backspace":
-          currentLine = "";
-          break;
-        case "enter":
-          let command = CommandsHelper.find((x) => x.command === currentLine);
+    if (event.domEvent.ctrlKey) {
+      key = `Ctrl+${key}`;
+    }
 
-          if (command !== undefined) {
-            isCommand = true;
-            command.callback(term);
-          }
+    if (event.domEvent.altKey) {
+      key = `Alt+${key}`;
+    }
 
-          if (responseMessage !== "") {
-            response(currentLine);
-          } else {
-            submit(currentLine);
-          }
+    let isCommand = false;
 
-          currentLine = "";
-          break;
-        default:
+    switch (key.toLowerCase()) {
+      case "backspace":
+        currentLine = currentLine.slice(0, -1);
+        break;
+      case "ctrl+backspace":
+        currentLine = "";
+        break;
+      case "enter":
+        let command = CommandsHelper.find((x) => x.command === currentLine);
+
+        if (command !== undefined) {
+          isCommand = true;
+          command.callback(term);
+        }
+
+        if (currentLine !== "") {
+          submit(currentLine);
+        }
+
+        currentLine = "";
+        break;
+      default:
+        if (!FilteredKeys.includes(key.toLowerCase())) {
           currentLine += key;
-          break;
-      }
-
-      if (isCommand) {
-        return;
-      }
-
-      const keyFromHandler = KeyHandlers.find(
-        (x) => x.key === key.toLowerCase()
-      );
-
-      if (keyFromHandler !== undefined) {
-        if (keyFromHandler.chars !== undefined) {
-          return term.write(keyFromHandler.chars);
         }
+        break;
+    }
 
-        if (keyFromHandler.callback !== undefined) {
-          return keyFromHandler.callback(term);
-        }
+    if (isCommand) {
+      return;
+    }
+
+    const keyFromHandler = KeyHandlers.find((x) => x.key === key.toLowerCase());
+
+    if (keyFromHandler !== undefined) {
+      if (keyFromHandler.chars !== undefined) {
+        return term.write(keyFromHandler.chars);
       }
 
-      return term.write(key);
+      if (keyFromHandler.callback !== undefined) {
+        return keyFromHandler.callback(term);
+      }
+    }
+
+    return term.write(key);
+  };
+
+  const handleWrite = (data: ArrayBuffer) => {
+    const enc = new TextDecoder("utf-8");
+    let str = enc.decode(data);
+    let splittedStr = str.split("\n");
+
+    splittedStr.forEach((text) => {
+      term.writeln("\x1b[1;37m" + text);
     });
-  }, []);
+
+    if (credentials !== undefined) {
+      const sign = credentials.user === "root" ? "$" : "#";
+      term.write(`\x1b[1;35m${credentials.user}\x1b[1;37m:~${sign} `);
+    }
+
+    term.scrollToBottom();
+  };
 
   return <div ref={terminalElement}></div>;
-};
+});
 
 export default XTerm;

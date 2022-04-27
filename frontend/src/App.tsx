@@ -1,16 +1,20 @@
-import React, { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
-import XTerm from "./components/XTerm";
-import socketIOClient, { Socket } from "socket.io-client";
+import XTerm, { RefProps } from "./components/XTerm";
 import Notification from "./components/Notification";
-import SocketContext from "./helpers/SocketContext";
-
-const ENDPOINT = "http://127.0.0.1:5000";
+import SocketContext, { SocketContextProvider } from "./helpers/SocketContext";
+import socket from "./helpers/Socket";
+import Credentials from "./helpers/Credentials";
 
 function App() {
-  const [responseMessage, setResponseMessage] = useState<string>("");
+  const terminalRef = useRef<RefProps>(null);
   const [connectedToSocket, setConnectedToSocket] = useState<boolean>(false);
-  const socket = socketIOClient(ENDPOINT);
+  const [sshConnection, setSshConnection] = useState<boolean>(false);
+
+  const [context, setContext] = useState<SocketContextProvider>({
+    credentials: new Credentials("", "", "", 0),
+    socket,
+  });
 
   socket.on("connect", () => {
     setConnectedToSocket(true);
@@ -20,39 +24,60 @@ function App() {
     setConnectedToSocket(false);
   });
 
-  socket.on("sshConnectionEstablished", (data) => {
-    console.log(data);
+  socket.on("setSshConnection", (value) => {
+    setSshConnection(value);
   });
 
   useEffect(() => {
-    setResponseMessage("Hostname: ");
-  }, []);
+    if (!sshConnection) {
+      setSshConnection(false);
+      terminalRef.current?.writeln("Please login your connection string.");
+      terminalRef.current?.writeln(
+        "Example: \x1b[1;35mroot\x1b[1;37m@127.0.0.1:22/password"
+      );
+      terminalRef.current?.write("Connection: ");
+    }
+  }, [connectedToSocket]);
 
   const submit = (cmd: string) => {
-    console.log(cmd);
+    if (!sshConnection) {
+      return handleAuth(cmd);
+    }
+
+    socket.emit("run", cmd);
   };
 
-  const response = (message: string) => {
-    console.log(message);
-    setResponseMessage("");
+  const handleAuth = (response: string) => {
+    try {
+      let splitted = response.split("@");
+      context.credentials.setUser(splitted[0]);
+
+      splitted = splitted[1].split(":");
+      context.credentials.setHostname(splitted[0]);
+
+      splitted = splitted[1].split("/");
+      context.credentials.setPort(parseInt(splitted[0]));
+      context.credentials.setPassword(splitted[1]);
+
+      socket.emit("connectToSsh", context.credentials);
+    } catch {
+      location.reload();
+    }
   };
 
   return (
     <div className="App">
-      <SocketContext.Provider value={socket as Socket}>
-        <div className="Inner">
-          {!connectedToSocket && (
-            <Notification text="Waiting socket connection" />
-          )}
+      <div className="Inner">
+        {!connectedToSocket && (
+          <Notification text="Waiting socket connection" />
+        )}
 
-          <XTerm
-            key={"terminal"}
-            submit={submit}
-            responseMessage={responseMessage}
-            response={response}
-          />
-        </div>
-      </SocketContext.Provider>
+        <SocketContext.Provider value={context}>
+          {sshConnection && <XTerm submit={submit} />}
+
+          {!sshConnection && <XTerm ref={terminalRef} submit={submit} />}
+        </SocketContext.Provider>
+      </div>
     </div>
   );
 }

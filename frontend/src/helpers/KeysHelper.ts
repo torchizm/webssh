@@ -1,6 +1,6 @@
 import { Terminal } from "xterm";
 
-const DisabledKeys : string[] = [
+const DisabledKeys: string[] = [
   "tab",
   "ctrl+x",
   "arrowup",
@@ -25,9 +25,11 @@ const DisabledKeys : string[] = [
   "end",
   "pageup",
   "pagedown",
-]
+];
 
-const KeyHandlers: {key: string, chars?: string, callback?: any}[] = [
+const FilteredKeys: string[] = ["ctrl+c", "ctrl+v", ...DisabledKeys];
+
+const KeyHandlers: { key: string; chars?: string; callback?: any }[] = [
   {
     key: "enter",
     chars: "\r\n",
@@ -44,18 +46,18 @@ const KeyHandlers: {key: string, chars?: string, callback?: any}[] = [
     key: "ctrl+c",
     callback: (terminal: Terminal) => {
       navigator.clipboard.writeText(terminal.getSelection());
-    }
+    },
   },
   {
     key: "ctrl+v",
     callback: (terminal: Terminal) => {
       if (terminal.hasSelection()) {
-        navigator.clipboard.readText().then(text => {
+        navigator.clipboard.readText().then((text) => {
           terminal.write(text);
         });
       }
-    }
-  }
+    },
+  },
 ];
 
-export { KeyHandlers, DisabledKeys };
+export { KeyHandlers, FilteredKeys, DisabledKeys };
